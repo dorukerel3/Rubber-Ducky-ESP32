@@ -38,6 +38,7 @@ void setup() {
   }
   Serial.println("SD Kart baglantisi basarili.");
 
+  // Sistemin cihazı tanıması için garanti bekleme süresi
   delay(500); 
 
   File file = SD.open("/payload.txt");
@@ -51,6 +52,7 @@ void setup() {
     }
   }
 
+  // İşlem başlıyor, LED'i yak
   digitalWrite(LED_PIN, HIGH);
 
   String line = "";
@@ -72,6 +74,7 @@ void setup() {
   
   file.close();
 
+  // İşlem bitti, LED'i söndür
   digitalWrite(LED_PIN, LOW);
 }
 
@@ -95,7 +98,8 @@ void executeCommand(String cmd) {
   if (instruction == "STRING") {
     for (int i = 0; i < argument.length(); i++) {
       Keyboard.print(argument[i]);
-      delay(30); 
+      // ÇÖZÜM: Harf atlamaması için süreyi 50ms olarak perçinledik
+      delay(50); 
     }
   }
   else if (instruction == "DELAY") {
