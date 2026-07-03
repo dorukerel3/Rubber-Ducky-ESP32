@@ -5,6 +5,11 @@
 #include <SD.h>
 #include <vector>
 #include <algorithm>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
+#include <Update.h>
+#include <Preferences.h>
 
 static constexpr uint8_t  PIN_SD_CS    = 10;
 static constexpr uint8_t  PIN_SD_MOSI  = 11;
@@ -50,6 +55,22 @@ static constexpr uint8_t MOD_RALT  = 0x10;
 #  define KEY_F22  0xF9
 #  define KEY_F23  0xFA
 #  define KEY_F24  0xFB
+#endif
+
+#ifndef KEY_NUM_0
+#  define KEY_NUM_0     0xEA
+#  define KEY_NUM_1     0xE1
+#  define KEY_NUM_2     0xE2
+#  define KEY_NUM_3     0xE3
+#  define KEY_NUM_4     0xE4
+#  define KEY_NUM_5     0xE5
+#  define KEY_NUM_6     0xE6
+#  define KEY_NUM_7     0xE7
+#  define KEY_NUM_8     0xE8
+#  define KEY_NUM_9     0xE9
+#endif
+#ifndef KEY_NUM_PLUS
+#  define KEY_NUM_PLUS  0xDF
 #endif
 
 struct CharMap {
@@ -175,13 +196,11 @@ static const CharMap JP_MAP[] = {};
 static const uint16_t JP_MAP_LEN = 0;
 
 enum LayoutID : uint8_t { LAY_EN = 0, LAY_TR, LAY_FR, LAY_DE, LAY_JP };
-
 struct LayoutInfo {
     const char*    name;
     const CharMap* map;
     uint16_t       len;
 };
-
 static const LayoutInfo LAYOUTS[] = {
     {"EN", EN_MAP, EN_MAP_LEN},
     {"TR", TR_MAP, TR_MAP_LEN},
@@ -190,8 +209,11 @@ static const LayoutInfo LAYOUTS[] = {
     {"JP", JP_MAP, JP_MAP_LEN},
 };
 static constexpr uint8_t LAYOUT_COUNT = sizeof(LAYOUTS) / sizeof(LAYOUTS[0]);
-
 static uint8_t g_layout = LAY_EN;
+
+enum TargetOS : uint8_t { OS_WIN = 0, OS_LINUX, OS_MAC };
+static uint8_t g_targetOS       = OS_WIN;
+static bool    g_unicodeEnabled = true;
 
 static USBHIDKeyboard Keyboard;
 static USBHIDMouse    Mouse;
@@ -260,6 +282,96 @@ static void pressCombo(uint8_t mods, uint8_t key) {
     delay(KEY_RELEASE_MS);
 }
 
+static void tapKey(uint8_t k) {
+    Keyboard.press(k);
+    delay(KEY_PRESS_MS);
+    Keyboard.release(k);
+    delay(KEY_RELEASE_MS);
+}
+
+static uint8_t numpadKey(uint8_t d) {
+    static const uint8_t kp[10] = {
+        KEY_NUM_0, KEY_NUM_1, KEY_NUM_2, KEY_NUM_3, KEY_NUM_4,
+        KEY_NUM_5, KEY_NUM_6, KEY_NUM_7, KEY_NUM_8, KEY_NUM_9
+    };
+    return (d < 10) ? kp[d] : KEY_NUM_0;
+}
+
+static char hexDigit(uint8_t nibble) {
+    return (nibble < 10) ? (char)('0' + nibble) : (char)('a' + (nibble - 10));
+}
+
+static void winTypeCodepoint(uint32_t cp) {
+    auto emitHex = [](uint32_t v) {
+        Keyboard.press(KEY_LEFT_ALT);
+        delay(KEY_PRESS_MS);
+        tapKey(KEY_NUM_PLUS);
+        bool started = false;
+        for (int shift = 28; shift >= 0; shift -= 4) {
+            const uint8_t nib = (v >> shift) & 0xF;
+            if (nib || started || shift == 0) {
+                started = true;
+                const char h = hexDigit(nib);
+                if (h >= '0' && h <= '9') tapKey(numpadKey(h - '0'));
+                else                       tapKey(h);
+            }
+        }
+        Keyboard.release(KEY_LEFT_ALT);
+        delay(KEY_RELEASE_MS);
+    };
+
+    if (cp <= 0xFFFF) {
+        emitHex(cp);
+    } else {
+        const uint32_t v  = cp - 0x10000;
+        const uint32_t hi = 0xD800 + (v >> 10);
+        const uint32_t lo = 0xDC00 + (v & 0x3FF);
+        emitHex(hi);
+        emitHex(lo);
+    }
+}
+
+static void linuxTypeCodepoint(uint32_t cp) {
+    Keyboard.press(KEY_LEFT_CTRL);
+    Keyboard.press(KEY_LEFT_SHIFT);
+    tapKey('u');
+    Keyboard.release(KEY_LEFT_SHIFT);
+    Keyboard.release(KEY_LEFT_CTRL);
+    delay(KEY_RELEASE_MS);
+
+    bool started = false;
+    for (int shift = 20; shift >= 0; shift -= 4) {
+        const uint8_t nib = (cp >> shift) & 0xF;
+        if (nib || started || shift == 0) {
+            started = true;
+            tapKey(hexDigit(nib));
+        }
+    }
+    tapKey(KEY_RETURN);
+}
+
+static void macTypeCodepoint(uint32_t cp) {
+    if (cp > 0xFFFF) {
+        cp = 0xFFFD;
+    }
+    Keyboard.press(KEY_LEFT_ALT);
+    delay(KEY_PRESS_MS);
+    for (int shift = 12; shift >= 0; shift -= 4) {
+        tapKey(hexDigit((cp >> shift) & 0xF));
+    }
+    Keyboard.release(KEY_LEFT_ALT);
+    delay(KEY_RELEASE_MS);
+}
+
+static void typeUnicodeFallback(uint32_t cp) {
+    switch (g_targetOS) {
+        case OS_LINUX: linuxTypeCodepoint(cp); break;
+        case OS_MAC:   macTypeCodepoint(cp);   break;
+        case OS_WIN:
+        default:       winTypeCodepoint(cp);   break;
+    }
+}
+
 static void typeCodepoint(uint32_t cp) {
     const LayoutInfo& L = LAYOUTS[g_layout];
     for (uint16_t i = 0; i < L.len; i++) {
@@ -279,11 +391,17 @@ static void typeCodepoint(uint32_t cp) {
             return;
         }
     }
+
     if (cp >= 0x20 && cp < 0x80) {
         Keyboard.press((char)cp);
         delay(KEY_PRESS_MS);
         Keyboard.release((char)cp);
         delay(KEY_RELEASE_MS);
+        return;
+    }
+
+    if (g_unicodeEnabled && cp >= 0x20) {
+        typeUnicodeFallback(cp);
     }
 }
 
@@ -366,6 +484,25 @@ static void executeLine(const String& line) {
         return;
     }
 
+    if (line.startsWith("TARGET_OS ")) {
+        String os = line.substring(10);
+        os.trim();
+        os.toUpperCase();
+        if      (os == "WIN" || os == "WINDOWS") g_targetOS = OS_WIN;
+        else if (os == "LINUX")                  g_targetOS = OS_LINUX;
+        else if (os == "MAC" || os == "MACOS" || os == "OSX") g_targetOS = OS_MAC;
+        return;
+    }
+
+    if (line.startsWith("UNICODE ")) {
+        String v = line.substring(8);
+        v.trim();
+        v.toUpperCase();
+        if      (v == "ON"  || v == "1" || v == "TRUE")  g_unicodeEnabled = true;
+        else if (v == "OFF" || v == "0" || v == "FALSE") g_unicodeEnabled = false;
+        return;
+    }
+
     if (line.startsWith("REPEAT ")) {
         const int n = line.substring(7).toInt();
         for (int i = 0; i < n; ++i) {
@@ -374,29 +511,24 @@ static void executeLine(const String& line) {
         }
         return;
     }
-
     g_lastLine = line;
 
     if (line.startsWith("DELAY ")) {
         delay((uint32_t)line.substring(6).toInt());
         return;
     }
-
     if (line.startsWith("DEFAULT_DELAY ") || line.startsWith("DEFAULTDELAY ")) {
         g_defaultDelay = (uint16_t)line.substring(line.indexOf(' ') + 1).toInt();
         return;
     }
-
     if (line.startsWith("STRING ")) {
         cmdString(line.substring(7), false);
         return;
     }
-
     if (line.startsWith("STRINGLN ")) {
         cmdString(line.substring(9), true);
         return;
     }
-
     if (line.startsWith("STRING_DELAY ")) {
         const String rest = line.substring(13);
         const int    sp   = rest.indexOf(' ');
@@ -406,7 +538,6 @@ static void executeLine(const String& line) {
         }
         return;
     }
-
     if (line.startsWith("STRINGLN_DELAY ")) {
         const String rest = line.substring(15);
         const int    sp   = rest.indexOf(' ');
@@ -416,7 +547,6 @@ static void executeLine(const String& line) {
         }
         return;
     }
-
     if (line.startsWith("MOUSE_MOVE ")) {
         const String args = line.substring(11);
         const int    sp   = args.indexOf(' ');
@@ -433,28 +563,24 @@ static void executeLine(const String& line) {
         }
         return;
     }
-
     if (line.startsWith("MOUSE_CLICK ")) {
         String btn = line.substring(12); btn.trim();
         const uint8_t m = mouseMask(btn);
         if (m) { Mouse.click(m); delay(KEY_PRESS_MS); }
         return;
     }
-
     if (line.startsWith("MOUSE_SCROLL ")) {
         const int8_t w = (int8_t)constrain(line.substring(13).toInt(), -127, 127);
         Mouse.move(0, 0, w);
         delay(KEY_PRESS_MS);
         return;
     }
-
     if (line.startsWith("MOUSE_PRESS ")) {
         String btn = line.substring(12); btn.trim();
         const uint8_t m = mouseMask(btn);
         if (m) Mouse.press(m);
         return;
     }
-
     if (line == "MOUSE_RELEASE") {
         Mouse.release(MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE);
         return;
@@ -472,20 +598,155 @@ static void executeLine(const String& line) {
     if (mods || key) pressCombo(mods, key);
 }
 
+static String    g_wifiSSID;
+static String    g_wifiPASS;
+static String    g_otaUser;
+static String    g_otaPass;
+static String    g_hostname = "hid-esp32";
+static WebServer otaServer(80);
+static volatile bool g_wifiUp = false;
+
+static const char OTA_PAGE[] = "<!doctype html><html><head><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>ESP32 HID OTA</title><style>body{font-family:sans-serif;max-width:520px;margin:40px auto;padding:0 16px}#bar{height:18px;background:#eee;border-radius:9px;overflow:hidden}#fill{height:100%;width:0;background:#4a90d9;transition:width .2s}button{padding:10px 16px;font-size:15px}</style></head><body><h2>ESP32-S3 HID &mdash; Firmware Update</h2><p>Select a compiled <code>.bin</code> and upload to flash new firmware. The device reboots automatically when done.</p><input type=file id=fw accept=\".bin\"><br><br><button onclick=up()>Upload &amp; Flash</button><p id=st></p><div id=bar><div id=fill></div></div><script>function up(){var f=document.getElementById('fw').files[0];if(!f){alert('Pick a .bin first');return;}var x=new XMLHttpRequest();var fd=new FormData();fd.append('firmware',f,f.name);x.upload.onprogress=function(e){if(e.lengthComputable){var p=Math.round(e.loaded/e.total*100);document.getElementById('fill').style.width=p+'%';document.getElementById('st').innerText=p+'%';}};x.onload=function(){document.getElementById('st').innerText=x.responseText||'Done. Rebooting...';};x.onerror=function(){document.getElementById('st').innerText='Upload failed';};x.open('POST','/update');x.send(fd);}</script></body></html>";
+
+static void secureWipeFile(const char* path) {
+    File w = SD.open(path, "r+");
+    if (w) {
+        size_t n = w.size();
+        w.seek(0);
+        uint8_t zeros[64];
+        memset(zeros, 0, sizeof(zeros));
+        while (n) {
+            const size_t c = (n < sizeof(zeros)) ? n : sizeof(zeros);
+            w.write(zeros, c);
+            n -= c;
+        }
+        w.flush();
+        w.close();
+    }
+    SD.remove(path);
+}
+
+static void loadWifiConfig() {
+    Preferences prefs;
+    prefs.begin("hidwifi", false);
+
+    File f = SD.open("/wifi.txt", FILE_READ);
+    if (f) {
+        String nSSID, nPASS, nUSER, nPWD, nHOST = "hid-esp32";
+        int positional = 0;
+        while (f.available()) {
+            String line = f.readStringUntil('\n');
+            line.trim();
+            if (!line.length() || line.startsWith("#")) continue;
+            const int eq = line.indexOf('=');
+            if (eq > 0) {
+                String key = line.substring(0, eq);  key.trim(); key.toUpperCase();
+                String val = line.substring(eq + 1); val.trim();
+                if      (key == "SSID")                      nSSID = val;
+                else if (key == "PASS" || key == "PASSWORD") nPASS = val;
+                else if (key == "OTA_USER")                  nUSER = val;
+                else if (key == "OTA_PASS")                  nPWD  = val;
+                else if (key == "HOSTNAME")                  nHOST = val;
+            } else {
+                if      (positional == 0) nSSID = line;
+                else if (positional == 1) nPASS = line;
+                positional++;
+            }
+        }
+        f.close();
+
+        if (nSSID.length()) {
+            prefs.putString("ssid", nSSID);
+            prefs.putString("pass", nPASS);
+            prefs.putString("user", nUSER);
+            prefs.putString("pwd",  nPWD);
+            prefs.putString("host", nHOST);
+            secureWipeFile("/wifi.txt");
+        }
+    }
+
+    g_wifiSSID = prefs.getString("ssid", "");
+    g_wifiPASS = prefs.getString("pass", "");
+    g_otaUser  = prefs.getString("user", "");
+    g_otaPass  = prefs.getString("pwd",  "");
+    g_hostname = prefs.getString("host", "hid-esp32");
+
+    prefs.end();
+}
+
+static bool otaAuthOK() {
+    if (!g_otaUser.length()) return true;
+    if (otaServer.authenticate(g_otaUser.c_str(), g_otaPass.c_str())) return true;
+    otaServer.requestAuthentication();
+    return false;
+}
+
+static void handleRoot() {
+    if (!otaAuthOK()) return;
+    otaServer.send(200, "text/html", OTA_PAGE);
+}
+
+static void handleUpdateDone() {
+    if (!otaAuthOK()) return;
+    const bool ok = !Update.hasError();
+    otaServer.send(200, "text/plain",
+                   ok ? "Update OK. Rebooting..." : "Update FAILED.");
+    if (ok) { delay(500); ESP.restart(); }
+}
+
+static void handleUpdateUpload() {
+    HTTPUpload& up = otaServer.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        if (g_otaUser.length() &&
+            !otaServer.authenticate(g_otaUser.c_str(), g_otaPass.c_str())) return;
+        Update.begin(UPDATE_SIZE_UNKNOWN);
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        Update.write(up.buf, up.currentSize);
+    } else if (up.status == UPLOAD_FILE_END) {
+        Update.end(true);
+    } else if (up.status == UPLOAD_FILE_ABORTED) {
+        Update.end();
+    }
+}
+
+static void otaTask(void*) {
+    if (!g_wifiSSID.length()) { vTaskDelete(NULL); return; }
+
+    WiFi.mode(WIFI_STA);
+    if (g_hostname.length()) WiFi.setHostname(g_hostname.c_str());
+    WiFi.begin(g_wifiSSID.c_str(), g_wifiPASS.c_str());
+
+    const uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - start) < 20000) delay(200);
+    if (WiFi.status() != WL_CONNECTED) { WiFi.disconnect(true); vTaskDelete(NULL); return; }
+
+    g_wifiUp = true;
+    if (g_hostname.length()) MDNS.begin(g_hostname.c_str());
+
+    otaServer.on("/",       HTTP_GET,  handleRoot);
+    otaServer.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
+    otaServer.begin();
+
+    for (;;) { otaServer.handleClient(); delay(2); }
+}
+
+static void startOTA() {
+    loadWifiConfig();
+    xTaskCreatePinnedToCore(otaTask, "ota", 8192, NULL, 1, NULL, 0);
+}
+
 void setup() {
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, LOW);
-
     Keyboard.begin();
     Mouse.begin();
     USB.begin();
-
     delay(300);
-
     sdSPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, -1);
     if (!SD.begin(PIN_SD_CS, sdSPI, 4000000)) blinkHalt(100, 100);
-
     digitalWrite(PIN_LED, HIGH);
+
+    startOTA();
 }
 
 void loop() {
@@ -493,7 +754,6 @@ void loop() {
     if (!root) blinkHalt(500, 500);
 
     std::vector<int> stages;
-
     File entry = root.openNextFile();
     while (entry) {
         if (!entry.isDirectory()) {
@@ -518,16 +778,17 @@ void loop() {
     root.close();
 
     if (stages.empty()) blinkHalt(500, 500);
-
     std::sort(stages.begin(), stages.end());
 
     for (int i = 0; i < (int)stages.size(); i++) {
-        g_layout = LAY_EN;
+        g_layout         = LAY_EN;
+        g_defaultDelay   = 0;
+        g_targetOS       = OS_WIN;
+        g_unicodeEnabled = true;
 
         String path = "/" + String(stages[i]) + ".txt";
         File f = SD.open(path, FILE_READ);
         if (!f) blinkHalt(500, 500);
-
         while (f.available()) {
             String line = f.readStringUntil('\n');
             line.trim();
@@ -535,9 +796,7 @@ void loop() {
             executeLine(line);
             if (g_defaultDelay) delay(g_defaultDelay);
         }
-
         f.close();
-
         if (i < (int)stages.size() - 1) delay(500);
     }
 
