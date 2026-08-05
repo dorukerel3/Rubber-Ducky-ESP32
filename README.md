@@ -1,6 +1,6 @@
 # Rubber-Ducky-ESP32 (Silicon Ghost)
 
-A custom **ESP32-S3** based hardware testing and **HID (Human Interface Device)** emulation tool, packaged in a footprint that closely resembles a standard USB flash drive. Developed as an independent hardware research project, the primary objective was to explore PCB design, microcontroller architecture, and rapid manufacturing processes end to end — from schematic capture through production-ready fabrication files. The board operates as a programmable USB device capable of emulating keyboard and mouse input while providing substantial onboard storage for executing complex payloads and scripts.
+A custom **ESP32-S3** based hardware testing and **HID (Human Interface Device)** emulation tool, packaged in a footprint that closely resembles a standard USB flash drive. Developed as an independent hardware research project, the primary objective was to explore PCB design, microcontroller architecture, and rapid manufacturing processes end to end from schematic capture through production-ready fabrication files. The board operates as a programmable USB device capable of emulating keyboard and mouse input while providing substantial onboard storage for executing complex payloads and scripts.
 
 ---
 
