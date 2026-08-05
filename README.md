@@ -1,6 +1,6 @@
 # Rubber-Ducky-ESP32 (Silicon Ghost)
 
-A custom **ESP32-S3** based hardware testing and **HID (Human Interface Device)** emulation tool, packaged in a footprint that closely resembles a standard USB flash drive. Developed as an independent hardware research project, the primary objective was to explore PCB design, microcontroller architecture, and rapid manufacturing processes end to end from schematic capture through production-ready fabrication files. The board operates as a programmable USB device capable of emulating keyboard and mouse input while providing substantial onboard storage for executing complex payloads and scripts.
+A custom **ESP32-S3** based hardware testing and **HID (Human Interface Device)** emulation tool, packaged in a footprint that closely resembles a standard USB flash drive. Developed as an independent hardware research project, the primary objective was to explore PCB design, microcontroller architecture, and rapid manufacturing processes end to end, from schematic capture through production-ready fabrication files. The board operates as a programmable USB device capable of emulating keyboard and mouse input while providing substantial onboard storage for executing complex payloads and scripts.
 
 ---
 
@@ -40,7 +40,7 @@ The design prioritizes two things: a compact, unobtrusive form factor that mimic
 
 The physical production result of the custom-designed printed circuit board:
 
-<img src="images/front.jpg" width="400" alt="Silicon Ghost — Front"> <img src="images/back.jpg" width="400" alt="Silicon Ghost — Back">
+<img src="images/front.jpg" width="400" alt="Silicon Ghost Front"> <img src="images/back.jpg" width="400" alt="Silicon Ghost Back">
 
 ---
 
@@ -59,7 +59,7 @@ The physical production result of the custom-designed printed circuit board:
 
 | Component | Specification |
 |-----------|---------------|
-| Microcontroller | `ESP32-S3-WROOM-2-N32R8V` — 32 MB Flash / 8 MB PSRAM variant, selected to maximize payload capacity. The `N16R8` variant is a compatible alternative. |
+| Microcontroller | `ESP32-S3-WROOM-2-N32R8V`, the 32 MB Flash / 8 MB PSRAM variant, selected to maximize payload capacity. The `N16R8` variant is a compatible alternative. |
 | Power delivery | Integrated 5V-to-3.3V LDO regulator, providing stable voltage conversion from the host USB port. |
 | Storage expansion | Onboard MicroSD card terminal for external data logging and payload storage. |
 | Form factor | Compact footprint engineered to closely resemble a standard USB flash drive. |
@@ -87,7 +87,7 @@ The repository includes all documentation necessary for independent fabrication 
 ```text
 .
 ├── BAD_USB_GERB.zip        Verified Gerber files, ready for PCB fabrication
-├── BAD_USB.csv             Bill of Materials (BOM) — SMT components and datasheet references
+├── BAD_USB.csv             Bill of Materials (BOM), SMT components and datasheet references
 ├── BAD_USB-all-pos.csv     Component placement file (CPL/POS) for automated SMT assembly
 └── README.md
 ```
