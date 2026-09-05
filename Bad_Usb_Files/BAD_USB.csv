@@ -1,0 +1,11 @@
+"Id";"Designator";"Footprint";"Quantity";"Designation";"Supplier and ref";
+1;"10Kohm1";"R_0805_2012Metric_Pad1.20x1.40mm_HandSolder";1;"10K";;;
+2;"10uF1, 10uF2";"C_0805_2012Metric_Pad1.18x1.45mm_HandSolder";2;"10uF";;;
+3;"22ohm1, 22ohm2";"R_0805_2012Metric_Pad1.20x1.40mm_HandSolder";2;"22";;;
+4;"100nF1, 100nF2";"C_0805_2012Metric_Pad1.18x1.45mm_HandSolder";2;"100nF";;;
+5;"330ohm1";"R_0805_2012Metric_Pad1.20x1.40mm_HandSolder";1;"330";;;
+6;"AP2112K";"SOT-23-5";1;"AP2112K-3.3";;;
+7;"ESP32-S3-1/S3-2";"ESP32-S3-WROOM-1";1;"ESP32-S3-WROOM-1/ESP32-S3-WROOM-2";;;
+8;"J1";"microSD_HC_Hirose_DM3AT-SF-PEJM5";1;"Conn_01x04";;;
+9;"LED1";"LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder";1;"LED";;;
+10;"USB-A1";"USB_A_Molex_48037-2200_Horizontal";1;"USB_A";;;
