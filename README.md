@@ -1,240 +1,291 @@
 # Rubber-Ducky-ESP32 (Silicon Ghost)
 
-A custom **ESP32-S3** based hardware testing and **HID (Human Interface Device)** emulation tool, packaged in a footprint that closely resembles a standard USB flash drive. Developed as an independent hardware research project, the primary objective was to explore PCB design, microcontroller architecture, and rapid manufacturing processes from schematic capture all the way through production ready fabrication files. The board operates as a programmable USB device capable of emulating keyboard and mouse input, running a **DuckyScript style payload interpreter** directly from a MicroSD card, with substantial onboard storage for complex scripts and payload sets.
+Custom **ESP32-S3** HID-injection tool in a USB flash-drive form factor. Runs a DuckyScript-compatible payload interpreter directly from a MicroSD card, with keyboard + mouse injection, five keyboard layouts, sequential multi-stage execution, and a browser-based OTA firmware updater — all in a single-`.ino` sketch built around a heap-fragmentation-free, industrial-grade hot path.
+
+The firmware is engineered to reach the same effective per-keystroke throughput class as commercial injectors (Hak5 Rubber Ducky / Flipper Zero BadUSB), while still reading uncompiled `.txt` payloads from the SD card on the fly — no `.bin` pre-compilation step required.
 
 ---
 
 ## Table of Contents
 
-- [Project Overview](#project-overview)
-- [Hardware Gallery](#hardware-gallery)
-- [Key Features](#key-features)
-- [Hardware Specifications](#hardware-specifications)
-- [Firmware](#firmware)
-- [Payload Scripting Reference](#payload-scripting-reference)
-- [Payload Staging on the SD Card](#payload-staging-on-the-sd-card)
-- [Status LED Behavior](#status-led-behavior)
-- [Storage and Payload Architecture](#storage-and-payload-architecture)
-- [Design Methodology](#design-methodology)
+- [Feature Summary](#feature-summary)
+- [Hardware](#hardware)
+- [Architecture Highlights](#architecture-highlights)
+- [SD Card Layout](#sd-card-layout)
+- [DuckyScript Command Reference](#duckyscript-command-reference)
+- [Keyboard Layouts](#keyboard-layouts)
+- [OTA Firmware Update](#ota-firmware-update)
+- [LED Status Codes](#led-status-codes)
+- [Build & Flash](#build--flash)
+- [Configuration Constants](#configuration-constants)
 - [Repository Contents](#repository-contents)
-- [Manufacturing Instructions](#manufacturing-instructions)
-- [Assembly Notes](#assembly-notes)
-- [Flashing and First Use](#flashing-and-first-use)
 - [Disclaimer](#disclaimer)
-- [Author and License](#author-and-license)
+- [License](#license)
 
 ---
 
-## Project Overview
+## Feature Summary
 
-The device is a self contained USB peripheral built around the ESP32-S3 microcontroller. When connected to a host machine, it enumerates as a native composite USB HID (keyboard and mouse) and injects input events without requiring any driver installation or background software on the target system.
-
-At boot it mounts a MicroSD card, scans for numbered `.txt` payload files, and executes them in order through an onboard interpreter that understands a DuckyScript style command set. The design prioritizes two things: a compact, unobtrusive form factor that mimics an ordinary flash drive, and enough removable storage to hold and stage large payloads made of several parts. Every design and manufacturing artifact required to fabricate, assemble, and program the board independently is included in this repository.
-
-| Attribute | Detail |
-|-----------|--------|
-| Platform | ESP32-S3 microcontroller |
-| Primary role | USB HID (keyboard / mouse) emulation |
-| Payload source | Numbered `.txt` scripts on a MicroSD card |
-| Interpreter | DuckyScript style command set with 5 keyboard layouts |
-| Form factor | Compact, resembling a USB flash drive |
-| Storage | High capacity onboard flash plus MicroSD expansion |
-| Deliverables | Firmware, production ready Gerber, BOM, CPL, and 3D models |
-
----
-
-## Hardware Gallery
-
-The physical production result of the custom designed printed circuit board:
-
-<img src="images/front.jpg" width="400" alt="Silicon Ghost Front"> <img src="images/back.jpg" width="400" alt="Silicon Ghost Back">
+| Capability | Detail |
+|---|---|
+| USB enumeration | Native composite HID (keyboard + mouse) via ESP32-S3 TinyUSB stack, no host-side driver install |
+| Payload source | Uncompiled `.txt` DuckyScript files, read live from MicroSD — no pre-compilation |
+| Multi-stage execution | Sequential run of every `N.txt` file in card root, sorted numerically |
+| Keyboard layouts | 5 layouts: **EN, TR, FR, DE, JP** — switchable mid-payload with `LAYOUT` |
+| Character resolution | **O(1)** 256-entry lookup tables per layout + tiny sorted overflow table for code points > 255 |
+| I/O strategy | 512-byte chunked SD reads into a fixed RAM buffer; zero character-by-character file reads |
+| Memory model | **Zero use of the Arduino `String` class**. All parsing on `char[]` buffers with `strtok_r`/`strtol`/`strchr`. No heap allocations after `setup()` |
+| HID timing | `delayMicroseconds()`-based press/release intervals (default 1 ms), an order of magnitude tighter than a naive Arduino sketch |
+| OTA updates | Browser-based upload page over a self-hosted WiFi Access Point, gated by a boot-time trigger |
+| Status feedback | Single-LED signaling for ready / SD error / no payload / OTA modes |
 
 ---
 
-## Key Features
+## Hardware
 
-- **Native USB HID emulation** of keyboard and mouse input, executed directly by the ESP32-S3 with no host side drivers or software required.
-- **DuckyScript style payload interpreter** running on the device, supporting strings, key combinations, modifiers, function keys, navigation keys, mouse movement, clicks, scrolling, delays, and loops.
-- **Sequential payload execution**, where numbered `.txt` files on the SD card run one after another, so complex operations can be split across ordered scripts.
-- **Five selectable keyboard layouts** (EN, TR, FR, DE, JP) for correct character mapping across regional hosts.
-- **MicroSD expansion slot** for removable payload storage and easy field updates without reflashing.
-- **High capacity module option**: the `ESP32-S3-WROOM-2-N32R8V` variant (32 MB flash / 8 MB PSRAM) maximizes onboard capacity, while the `N16R8` variant is a compatible alternative.
-- **Status LED signaling** for ready, running, and error states.
-- **Stable onboard power delivery** through an integrated 5 V to 3.3 V LDO regulator fed directly from the host USB port.
-- **Fully documented for independent fabrication**, with verified Gerbers, a complete bill of materials, a placement file for automated SMT assembly, and 3D models for the board and enclosure.
+| Aspect | Part / Value |
+|---|---|
+| Microcontroller | **ESP32-S3-WROOM-2** (N32R8V recommended — 32 MB flash / 8 MB PSRAM) |
+| Power regulation | AP2112K-3.3 (5 V USB → 3.3 V LDO) |
+| USB connector | Molex 48037-2200 Type-A |
+| SD connector | Hirose DM3AT-SF-PEJM5 (MicroSD, SPI mode) |
+| Status LED | GPIO 46 |
+| SD SPI bus | HSPI — CS 10, MOSI 11, SCK 12, MISO 13 |
+| OTA trigger pin | GPIO 4 (`INPUT_PULLUP`, hold to GND at boot) |
 
----
-
-## Hardware Specifications
-
-| Component | Part | Package | Role |
-|-----------|------|---------|------|
-| Microcontroller | `ESP32-S3-WROOM-1` / `-2` (`N32R8V` recommended) | RF module | MCU, USB HID, SD interface, up to 32 MB flash / 8 MB PSRAM |
-| Regulator | AP2112K-3.3 | SOT-23-5 | 5 V to 3.3 V LDO from host USB |
-| SD connector | Hirose DM3AT-SF-PEJM5 | microSD | Removable payload storage |
-| USB connector | Molex 48037-2200 | USB Type A horizontal | Host connection and power |
-| Status LED | LED | 0805 | Ready / run / error signaling |
-| Passives | 1x 10 kΩ, 2x 22 Ω, 1x 330 Ω resistors; 2x 10 µF, 2x 100 nF capacitors | 0805 | USB data termination (22 Ω), pull up, LED limiting, decoupling |
-
-Full references and footprints are in [`Bad_Usb_Files/BAD_USB.csv`](Bad_Usb_Files/BAD_USB.csv); placement coordinates in [`Bad_Usb_Files/BAD_USB-all-pos.csv`](Bad_Usb_Files/BAD_USB-all-pos.csv).
-
-### Firmware pin map
-
-| Signal | GPIO |
-|--------|------|
-| SD chip select (CS) | 10 |
-| SD MOSI | 11 |
-| SD clock (SCK) | 12 |
-| SD MISO | 13 |
-| Status LED | 46 |
+Full Gerbers, BOM/CPL, 3D models and assembly notes for independent fabrication live under `Bad_Usb_Files/`.
 
 ---
 
-## Firmware
+## Architecture Highlights
 
-The firmware ([`Bad_Usb_Files/BAD_USB.ino`](Bad_Usb_Files/BAD_USB.ino)) is a single Arduino sketch built on the ESP32 Arduino core's native USB stack (`USB.h`, `USBHIDKeyboard.h`, `USBHIDMouse.h`) plus the `SD` library over SPI.
+The firmware is written to industrial-embedded standards, not hobby-Arduino conventions.
 
-At boot it initializes the HID interfaces, mounts the SD card, and enters its run loop: it enumerates every numbered `.txt` file at the card root, sorts them numerically, and executes each line through the command interpreter. Character output is mapped through the currently selected keyboard layout so that symbols and accented characters land correctly on the host. After the last stage completes, the board idles.
+**Zero-allocation hot path.** Every text-processing routine — line reading, tokenisation, command dispatch, UTF-8 decoding — operates on stack-resident `char[]` buffers. The Arduino `String` class is not linked anywhere in the runtime, eliminating heap fragmentation entirely.
+
+**Chunked buffered I/O.** SD payloads are read in 512-byte blocks into a `LineReader` struct that walks a pointer through the buffer, transparently stitching lines across chunk boundaries. `File::readStringUntil()` is not used.
+
+**O(1) character lookup.** Every layout's charmap is expanded once at boot (`buildCharTables()`) into a flat 256-entry array indexed directly by Unicode code point. A single memory dereference — `g_table256[layout][cp]` — retrieves the HID report (modifier + keycode) for any Latin-1 character. Code points above 255 (TR `İığĞşŞ`, FR `œŒ`, the shared `€`) live in a per-layout overflow table of ≤ 8 entries, serviced by binary search — mathematically O(log n) on a single-digit n, effectively free.
+
+**Microsecond HID timing.** Press/release spacing runs on `delayMicroseconds()` (default 1 ms per phase) rather than the millisecond-scale `delay()` calls a typical sketch uses. The interval sits above the standard 1 ms USB HID polling interrupt so no reports are dropped, but well below anything a human-scale delay would impose — putting the effective character rate in the same class as dedicated commercial injectors.
+
+**Fixed-size stage table.** SD root discovery lands into a static `int[256]` sorted with an insertion sort — no `std::vector`, no `std::sort`, no allocator activity.
 
 ---
 
-## Payload Scripting Reference
+## SD Card Layout
 
-Payloads are plain text scripts, one command per line. The interpreter supports:
+Format the card as **FAT32**. The firmware only touches the root directory:
 
-| Command | Action |
-|---------|--------|
-| `REM <text>` | Comment, ignored at runtime |
-| `STRING <text>` | Types the text using the active layout |
-| `STRINGLN <text>` | Types the text, then presses Enter |
-| `DELAY <ms>` | Pauses for the given milliseconds |
-| `DEFAULT_DELAY <ms>` / `DEFAULTDELAY <ms>` | Delay inserted automatically after every command |
-| `REPEAT <n>` | Repeats the previous command *n* times |
-| `LAYOUT <code>` | Switches keyboard layout (`EN`, `TR`, `FR`, `DE`, `JP`) |
-| Modifier combos | `CTRL`/`CONTROL`, `SHIFT`, `ALT`, `GUI`/`WINDOWS`, `RALT` combined with a key, e.g. `CTRL ALT DELETE` |
-| Named keys | `ENTER`, `TAB`, `SPACE`, `ESC`/`ESCAPE`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `CAPSLOCK`, `SCROLLLOCK`, `PAUSE`, `MENU`/`APP`, `F1` through `F24` |
-| `MOUSE_MOVE <x> <y>` | Moves the cursor by a relative offset (split automatically into HID's ±127 range) |
-| `MOUSE_CLICK <button>` | Clicks `LEFT`, `RIGHT`, or `MIDDLE` |
-| `MOUSE_PRESS <button>` | Presses and holds a mouse button |
-| `MOUSE_RELEASE` | Releases all mouse buttons |
-| `MOUSE_SCROLL <amount>` | Scrolls the wheel (positive up, negative down) |
+```
+/
+├── 1.txt      ← executed first
+├── 2.txt      ← executed after 1.txt completes
+├── 3.txt      ← ... and so on, numerically sorted
+├── ...
+└── OTA.TXT    ← (optional) presence triggers OTA mode at boot, then auto-deleted
+```
 
-Example payload:
+- Files are matched by exact pattern: **numeric basename + `.txt`** (case-insensitive extension).
+- Between stages the interpreter waits 500 ms, resets `g_layout` to `EN`, and clears the `REPEAT` history — stages do not leak state.
+- After the last stage completes the LED turns off and the device halts. It does **not** loop back and re-run stage 1 automatically.
 
-```text
-REM Open a terminal and print a message
-DEFAULT_DELAY 50
+---
+
+## DuckyScript Command Reference
+
+All commands are case-sensitive and one per line. Blank lines and lines beginning with `REM`, `//`, or `#` are ignored.
+
+### Text injection
+
+| Command | Behavior |
+|---|---|
+| `STRING <text>` | Type UTF-8 text through the active layout |
+| `STRINGLN <text>` | Same as `STRING`, then press `ENTER` |
+| `STRING_DELAY <ms> <text>` | Type text with an inter-character pause of `<ms>` milliseconds |
+| `STRINGLN_DELAY <ms> <text>` | As above, then `ENTER` |
+
+### Timing
+
+| Command | Behavior |
+|---|---|
+| `DELAY <ms>` | Blocking wait for `<ms>` milliseconds |
+| `DEFAULT_DELAY <ms>` / `DEFAULTDELAY <ms>` | Insert this delay after every subsequent command |
+
+### Modifier / key combos
+
+Combine any of `CTRL`/`CONTROL`, `SHIFT`, `ALT`, `GUI`/`WINDOWS`/`COMMAND`/`META`, `ALTGR`/`RALT` with one named key or single character:
+
+```
+CTRL ALT DELETE
 GUI r
-DELAY 500
-STRINGLN cmd
-DELAY 800
-STRINGLN echo Silicon Ghost was here
+SHIFT F10
+```
+
+### Named keys
+
+`ENTER`/`RETURN`, `TAB`, `SPACE`, `BACKSPACE`/`BKSP`, `DELETE`/`DEL`, `ESCAPE`/`ESC`, `HOME`, `END`, `INSERT`, `PAGEUP`/`PAGE_UP`, `PAGEDOWN`/`PAGE_DOWN`, `UP`/`DOWN`/`LEFT`/`RIGHT`, `CAPSLOCK`/`CAPS_LOCK`, `NUMLOCK`/`NUM_LOCK`, `SCROLLLOCK`/`SCROLL_LOCK`, `PRINTSCREEN`/`PRTSC`, `PAUSE`/`BREAK`, `MENU`/`APP`, `F1`–`F24`.
+
+### Mouse
+
+| Command | Behavior |
+|---|---|
+| `MOUSE_MOVE <dx> <dy>` | Relative move; any range, auto-chunked into ±127 HID reports |
+| `MOUSE_CLICK LEFT\|RIGHT\|MIDDLE` | Single click |
+| `MOUSE_PRESS LEFT\|RIGHT\|MIDDLE` | Hold button down (no auto-release) |
+| `MOUSE_RELEASE` | Release all mouse buttons |
+| `MOUSE_SCROLL <n>` | Vertical wheel scroll, `-127..127` |
+
+### Control flow
+
+| Command | Behavior |
+|---|---|
+| `REPEAT <n>` | Re-run the previous non-`REPEAT` line `<n>` times |
+| `LAYOUT <code>` | Switch active keyboard layout: `EN`, `TR`, `FR`, `DE`, `JP` |
+
+### Comments
+
+```
+REM anything after REM is ignored
+// classic slash comment
+#  shell-style comment
 ```
 
 ---
 
-## Payload Staging on the SD Card
+## Keyboard Layouts
 
-- Payload files live at the **root of the SD card** and must be named with digits only, plus the `.txt` extension: `1.txt`, `2.txt`, `10.txt`, and so on.
-- At runtime the files are collected and sorted **numerically**, then executed in ascending order, so operations made of several parts can be split across ordered stages.
-- Files whose names are not purely numeric are ignored, so notes and unrelated files on the card are safe to keep alongside payloads.
-- Each stage resets to the `EN` layout at its start; issue a `LAYOUT` command inside the stage if another mapping is needed.
-- If no valid numbered `.txt` files are found, the board signals an error via the status LED (see below).
+Layouts are compile-time embedded and activated at runtime with `LAYOUT`.
 
----
+| Code | Coverage |
+|---|---|
+| `EN` | US ANSI. No remapping — all ASCII passes straight through to the HID report. |
+| `TR` | Turkish-Q. Full charmap for `ı İ ğ Ğ ş Ş ö Ö ü Ü ç Ç`, all AltGr-shifted symbols, and `€`. |
+| `FR` | French AZERTY with dead-key composition for accented vowels (`é è à â ê î ô û ë ï ü ÿ ç ñ ã õ`), plus `œ Œ` and `€`. |
+| `DE` | German QWERTZ. `ä Ä ö Ö ü Ü ß` and `€`, with a small selection of dead-key composed accents. |
+| `JP` | JIS punctuation charmap — corrects `@ [ ] ` `{ } \| : + * " & ' ( ) _ = ^` for a host configured with the Japanese JIS layout. Full kana input is not supported (that requires driving the host IME, not a HID charmap remap). |
 
-## Status LED Behavior
-
-| State | LED |
-|-------|-----|
-| Booting / HID init | Off |
-| Ready, payloads running | Solid on |
-| SD mount failure | Rapid blink (about 10 Hz) |
-| No payloads found / read error | Slow blink (about 1 Hz) |
-| All stages complete | Off (board idles) |
+At the start of each stage `g_layout` resets to `EN`, so a payload must explicitly `LAYOUT XX` if the target host is not US ANSI.
 
 ---
 
-## Storage and Payload Architecture
+## OTA Firmware Update
 
-Storage capacity was the central selection criterion for the main module. The `ESP32-S3-WROOM-2-N32R8V` was chosen specifically for its 32 MB of flash and 8 MB of PSRAM, ensuring the device can hold and execute large payloads without running into capacity limits. Where maximum capacity is not required, the `N16R8` variant remains fully compatible and fits the same footprint.
+The firmware ships with a browser-based OTA updater that runs on a self-hosted WiFi Access Point. It is **off by default** and cannot be reached from the target machine or the surrounding network under normal operation.
 
-Beyond the onboard flash, the board exposes a MicroSD card terminal. This provides an expandable, removable storage tier, the primary payload source at runtime, suitable for external data logging and for staging larger or more numerous payloads than would comfortably fit in flash alone. It also allows payloads to be swapped in the field without reflashing the firmware.
+### Trigger
+
+Two independent triggers, either alone is enough:
+
+1. **SD card file** — drop an empty file named `OTA.TXT` in the SD root and reset the board. The firmware detects the file, deletes it immediately (so the next reboot goes back to normal payload execution), and enters OTA mode.
+2. **Hardware pin** — hold `GPIO 4` to `GND` while the board powers on / resets.
+
+If neither trigger is present, no radio is initialised, no AP is broadcast, and the OTA code path never runs — HID timing is completely unaffected.
+
+### Using it
+
+1. Trigger OTA mode. LED begins a slow **double-blink** (broadcasting + idle).
+2. Join the WiFi network **`BadUSB-OTA`** with `OTA_AP_PASSWORD` from your phone or laptop.
+3. Browse to **`http://192.168.4.1/`**.
+4. The browser prompts a Basic-Auth login — username `admin`, password `OTA_UPLOAD_PASSWORD`.
+5. On the upload page, pick a compiled `.bin` firmware image (from Arduino IDE: **Sketch → Export Compiled Binary**) and click **Upload**.
+6. On success the page shows `Update OK, rebooting...` and the board flashes and auto-reboots into the new firmware. On failure it shows `Update FAILED` and reboots back into the previous firmware — a bad or interrupted upload cannot brick the device.
+7. If no upload occurs within **3 minutes**, OTA mode times out, tears down the AP, and boots normally into payload execution.
+
+### Security notes
+
+- Both passwords (`OTA_AP_PASSWORD` and `OTA_UPLOAD_PASSWORD`) **must** be set to real values before flashing — the shipped file uses `CHANGE_ME_*` placeholders on purpose.
+- `OTA_AP_PASSWORD` must be at least **8 characters** or `WiFi.softAP()` will silently create an *open* network.
+- Basic Auth over the AP is clear-text on the RF side. Treat the OTA mode as a physical-access convenience, not a hardened remote-update channel.
 
 ---
 
-## Design Methodology
+## LED Status Codes
 
-To facilitate rapid prototyping and quickly validate the core concept, the initial schematics and trace routing were executed using **Fritzing**. While industry standard EDA tools are typically preferred for complex routing, prioritizing a rapid development tool was a calculated decision to accelerate the first hardware iteration. The resulting Gerber files have been thoroughly reviewed, validated, and are fully ready for production.
+| Pattern | Meaning |
+|---|---|
+| Solid ON | Normal boot succeeded; running payloads |
+| Solid OFF (after run) | All payload stages completed; device halted |
+| Fast blink 100 ms on / 100 ms off | SD card failed to mount |
+| Slow blink 500 ms on / 500 ms off | No `N.txt` payload files found, or a payload file failed to open |
+| Slow double-blink (OTA mode) | AP broadcasting, waiting for upload |
+| Solid ON / rapid flicker (OTA mode) | Firmware upload in progress |
+
+---
+
+## Build & Flash
+
+**Board target:** ESP32-S3 (`Tools → Board → ESP32 Arduino → ESP32S3 Dev Module`).
+
+Required Arduino IDE settings:
+
+| Setting | Value |
+|---|---|
+| USB CDC On Boot | Enabled (for serial log during OTA errors) |
+| USB Mode | `USB-OTG (TinyUSB)` |
+| USB Firmware MSC On Boot | Disabled |
+| USB DFU On Boot | Disabled |
+| Partition Scheme | `Default 4MB with spiffs` (or `Huge APP` if using the 32 MB N32R8V) |
+| Flash Size | Match module (16 MB / 32 MB) |
+
+Libraries: all required libs (`USB`, `USBHIDKeyboard`, `USBHIDMouse`, `SD`, `SPI`, `WiFi`, `WebServer`, `Update`) ship with the ESP32 Arduino core — no external installs.
+
+### First flash
+
+1. Open `Bad_Usb_Files/BadUSB_Optimized.ino`.
+2. Change the four `CHANGE_ME_*` placeholders near the top of the file (AP SSID/password, upload username/password).
+3. Connect the board over USB, select its serial port, hit **Upload**.
+4. Copy your `N.txt` payloads onto a FAT32-formatted MicroSD card and insert it. Power-cycle.
+
+### Subsequent updates
+
+Either reflash over USB as above, or use the OTA flow: **Sketch → Export Compiled Binary**, drop `OTA.TXT` on the card, reboot, upload the `.bin` at `http://192.168.4.1/`.
+
+---
+
+## Configuration Constants
+
+All tunable knobs live at the top of the `.ino`:
+
+| Constant | Purpose | Default |
+|---|---|---|
+| `PIN_SD_CS`, `PIN_SD_MOSI`, `PIN_SD_SCK`, `PIN_SD_MISO` | SD SPI wiring | 10 / 11 / 12 / 13 |
+| `PIN_LED` | Status LED | 46 |
+| `PIN_OTA_TRIGGER` | OTA trigger pin (LOW at boot = enter OTA) | 4 |
+| `KEY_PRESS_US`, `KEY_RELEASE_US` | HID press / release intervals | 1000 µs each |
+| `CHUNK_SIZE`, `DUCKY_LINE_MAX` | SD read chunk + max line length | 512 / 512 bytes |
+| `MAX_STAGES` | Cap on `N.txt` payload files scanned | 256 |
+| `OTA_AP_SSID` | Broadcast AP name in OTA mode | `BadUSB-OTA` |
+| `OTA_AP_PASSWORD` | WPA2 password for the AP (≥ 8 chars) | placeholder |
+| `OTA_UPLOAD_USERNAME` / `OTA_UPLOAD_PASSWORD` | Basic Auth for the upload page | `admin` / placeholder |
+| `OTA_TRIGGER_FILE` | SD filename that triggers OTA on boot | `/OTA.TXT` |
+| `OTA_IDLE_TIMEOUT_MS` | OTA mode auto-exit after this much no-activity | 180 000 (3 min) |
+
+> **Note:** the internal line-buffer constant is named `DUCKY_LINE_MAX` (not `LINE_MAX`) to avoid a preprocessor collision with the POSIX `LINE_MAX` macro pulled in transitively by `Arduino.h → FreeRTOS → limits.h` on the Xtensa toolchain.
 
 ---
 
 ## Repository Contents
 
-```text
-.
-├── Bad_Usb_Files/
-│   ├── BAD_USB.ino                     Firmware. Arduino sketch: USB HID stack, SD payload loader,
-│   │                                   DuckyScript style interpreter, 5 keyboard layouts, mouse commands
-│   ├── BAD_USB.csv                     Bill of materials: references, quantities, footprints
-│   ├── BAD_USB-all-pos.csv             Pick and place data: X/Y, rotation, board side for every component
-│   ├── Bad_Usb_Gerber&Drill.zip        Fabrication package: copper, mask, paste, silkscreen, drill files
-│   ├── Bad_Usb_Design.STEP             3D STEP model of the assembled PCB
-│   └── Bad_Usb_Enclosure.step          3D STEP model of the flash drive enclosure
-├── images/
-│   ├── front.jpg                       Assembled board, component side
-│   └── back.jpg                        Assembled board, reverse side
-├── LICENSE                             MIT license
-└── README.md                           This document
 ```
-
-| File | Purpose |
-|------|---------|
-| `BAD_USB.ino` | The device firmware. Flash this to the ESP32-S3. |
-| `BAD_USB.csv` (BOM) | Bill of materials: all surface mount components with footprints and references. |
-| `BAD_USB-all-pos.csv` (CPL/POS) | Component placement file for automated SMT assembly. |
-| `Bad_Usb_Gerber&Drill.zip` | Verified Gerber and Excellon drill files ready for PCB fabrication. |
-| `Bad_Usb_Design.STEP` | 3D model of the assembled board for mechanical verification. |
-| `Bad_Usb_Enclosure.step` | 3D model of the enclosure for printing or machining the flash drive shell. |
-
----
-
-## Manufacturing Instructions
-
-1. Provide the `Bad_Usb_Gerber&Drill.zip` archive to a standard PCB manufacturer.
-2. For PCBA (Printed Circuit Board Assembly) services, supply `BAD_USB.csv` and `BAD_USB-all-pos.csv`.
-3. Ensure the manufacturer specifies the `ESP32-S3-WROOM-2` module during assembly to maintain the intended high capacity storage architecture. The footprint is identical to the WROOM-1 series, requiring no physical alterations to the board design.
-4. Use `Bad_Usb_Enclosure.step` to 3D print or machine the enclosure shell.
-
----
-
-## Assembly Notes
-
-- The `ESP32-S3-WROOM-2` and `WROOM-1` modules share an identical footprint, so substituting between them requires no changes to the PCB layout.
-- Selecting the `N32R8V` module preserves the maximum capacity storage architecture; the `N16R8` variant is acceptable where a smaller flash budget is sufficient.
-- The two 22 Ω resistors are the USB D+ and D− series terminations. Do not omit them.
-- Power is derived entirely from the host USB port and regulated on the board, so no external supply is needed during operation.
-
----
-
-## Flashing and First Use
-
-1. Open `Bad_Usb_Files/BAD_USB.ino` in the Arduino IDE with the ESP32 board package installed.
-2. Select an **ESP32-S3** board, and under Tools enable native USB (USB CDC and USB HID) and set the flash size to match your module.
-3. Compile and upload to the board.
-4. Format a MicroSD card as FAT32 and place your numbered payloads (`1.txt`, `2.txt`, and so on) at its root.
-5. Insert the card and plug the device into the host. The status LED goes solid when payloads begin executing.
+/
+├── Bad_Usb_Files/           ← firmware source, PCB Gerbers, BOM/CPL, 3D models
+│   └── BadUSB_Optimized.ino
+├── images/                  ← hardware photos and diagrams
+├── LICENSE                  ← MIT
+└── README.md                ← this file
+```
 
 ---
 
 ## Disclaimer
 
-This hardware was developed strictly for **educational purposes and authorized security research**. It is not intended for use on systems, networks, or hardware without the explicit consent of the owner. The author assumes no liability for any misuse or damage caused by the fabrication or deployment of this design.
+This project is developed strictly for **educational purposes and authorized security research**. It is **not intended for use on systems, networks, or hardware without the explicit consent of the owner**. The author accepts no responsibility for misuse. Local law regarding possession and use of HID-injection tooling varies — verify your jurisdiction before building or carrying the device.
 
 ---
 
-## Author and License
+## License
 
-Developed by **Doruk Erel**, [dorukerel.com](https://dorukerel.com).
+MIT. See [`LICENSE`](LICENSE).
 
-Released under the **MIT License**. See the [`LICENSE`](LICENSE) file for the full text.
+**Author:** Doruk Erel
