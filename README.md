@@ -9,6 +9,7 @@ The firmware is engineered to reach the same effective per-keystroke throughput 
 ## Table of Contents
 
 - [Feature Summary](#feature-summary)
+- [Hardware Gallery](#hardware-gallery)
 - [Hardware](#hardware)
 - [Architecture Highlights](#architecture-highlights)
 - [SD Card Layout](#sd-card-layout)
@@ -28,7 +29,6 @@ The firmware is engineered to reach the same effective per-keystroke throughput 
 
 ![Board front](images/front.jpg)
 ![Board back](images/back.jpg)
-![Assembled device](images/assembled.jpg)
 
 ---
 
