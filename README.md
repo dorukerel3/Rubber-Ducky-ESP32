@@ -24,6 +24,14 @@ The firmware is engineered to reach the same effective per-keystroke throughput 
 
 ---
 
+## Hardware Gallery
+
+![Board front](images/front.jpg)
+![Board back](images/back.jpg)
+![Assembled device](images/assembled.jpg)
+
+---
+
 ## Feature Summary
 
 | Capability | Detail |
